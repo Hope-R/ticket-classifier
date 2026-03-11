@@ -1,1 +1,15 @@
+# Ignore raw ticket data
+raw_data/
 
+# Ignore output files
+output/
+
+# Ignore real business rules
+config/business_rules.xlsx
+
+# Ignore Mac system files
+.DS_Store
+
+# Ignore Python cache
+__pycache__/
+*.pyc
