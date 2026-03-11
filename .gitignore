@@ -13,3 +13,8 @@ config/business_rules.xlsx
 # Ignore Python cache
 __pycache__/
 *.pyc
+
+# Ignore development folders
+venv/
+archive/
+sandbox/
