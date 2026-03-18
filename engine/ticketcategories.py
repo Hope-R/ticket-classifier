@@ -55,6 +55,11 @@ def process_tickets():
         sheet_name="column_mapping"
     )
 
+    final_category_consolidation_df = pd.read_excel(
+        RULES_FILE,
+        sheet_name="final_category_consolidation"
+    )
+
     # ==================================================
     # 3️⃣ COLUMN STANDARDIZATION
     # ==================================================
@@ -174,7 +179,7 @@ def process_tickets():
     # 8️⃣ CLEAN TEXT FIELDS
     # ==================================================
 
-    for col in ["Short description", "Description", "Service"]:
+    for col in ["Short description", "Description", "Service", "Category"]:
         if col in end_user_tickets.columns:
             end_user_tickets[col] = (
                 end_user_tickets[col]
@@ -250,7 +255,41 @@ def process_tickets():
     )
 
     # ==================================================
-    # 1️⃣1️⃣ TEMPLATE SANITIZATION
+    # 1️⃣1️⃣ LOAD FINAL CATEGORY CONSOLIDATION RULES
+    # ==================================================
+
+    final_category_consolidation_df.columns = (
+        final_category_consolidation_df.columns.str.strip()
+    )
+
+    final_category_consolidation_df["Old Category Name"] = (
+        final_category_consolidation_df["Old Category Name"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+    final_category_consolidation_df["Final Mapped Category"] = (
+        final_category_consolidation_df["Final Mapped Category"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+    final_category_consolidation_df = final_category_consolidation_df[
+        (final_category_consolidation_df["Old Category Name"] != "") &
+        (final_category_consolidation_df["Final Mapped Category"] != "")
+    ]
+
+    final_category_map = dict(
+        zip(
+            final_category_consolidation_df["Old Category Name"],
+            final_category_consolidation_df["Final Mapped Category"]
+        )
+    )
+
+    # ==================================================
+    # 1️⃣2️⃣ TEMPLATE SANITIZATION
     # ==================================================
 
     template_noise_df["Phrase"] = (
@@ -280,7 +319,7 @@ def process_tickets():
     )
 
     # ==================================================
-    # 1️⃣2️⃣ WEIGHTED SCORING ENGINE
+    # 1️⃣3️⃣ WEIGHTED SCORING ENGINE
     # ==================================================
 
     MIN_SCORE_THRESHOLD = 1
@@ -387,7 +426,18 @@ def process_tickets():
     )
 
     # ==================================================
-    # 1️⃣3️⃣ FINAL OUTPUT
+    # 1️⃣4️⃣ FINAL CATEGORY CONSOLIDATION
+    # ==================================================
+
+    end_user_tickets["Ticket Category"] = (
+        end_user_tickets["Ticket Category"]
+        .astype(str)
+        .str.strip()
+        .replace(final_category_map)
+    )
+
+    # ==================================================
+    # 1️⃣5️⃣ FINAL OUTPUT
     # ==================================================
 
     final_columns = required_columns + [
@@ -404,6 +454,7 @@ def process_tickets():
     end_user_tickets.to_excel(output_file, index=False)
 
     print("✅ Weighted scoring processing complete.")
+    print("✅ Final category consolidation applied.")
     print("Saved to:", output_file)
 
     return end_user_tickets
