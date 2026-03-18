@@ -456,5 +456,6 @@ def process_tickets():
     print("✅ Weighted scoring processing complete.")
     print("✅ Final category consolidation applied.")
     print("Saved to:", output_file)
+    print("I am just experimenting GitHub Desktop")
 
     return end_user_tickets
