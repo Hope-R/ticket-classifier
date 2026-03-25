@@ -1,9 +1,9 @@
 import os
-import pandas as pd
 import re
+import pandas as pd
 
 
-def process_tickets():
+def process_tickets(run_month):
 
     # ==================================================
     # 1️⃣ BASE PATHS
@@ -14,8 +14,32 @@ def process_tickets():
     RAW_DIR = os.path.join(BASE_DIR, "raw_data")
     OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 
+    MONTH_RAW_DIR = os.path.join(RAW_DIR, run_month)
+
     # ==================================================
-    # 2️⃣ LOAD CONFIG FILES
+    # 2️⃣ VALIDATE INPUT MONTH FOLDER
+    # ==================================================
+
+    if not os.path.exists(MONTH_RAW_DIR):
+        print(f"❌ Month folder not found: {MONTH_RAW_DIR}")
+        return None
+
+    incident_file = os.path.join(MONTH_RAW_DIR, "incident.xlsx")
+    ur_file = os.path.join(MONTH_RAW_DIR, "ur.xlsx")
+    task_file = os.path.join(MONTH_RAW_DIR, "task.xlsx")
+
+    missing_files = []
+
+    for f in [incident_file, ur_file, task_file]:
+        if not os.path.exists(f):
+            missing_files.append(os.path.basename(f))
+
+    if missing_files:
+        print(f"❌ Missing raw data file(s) in {MONTH_RAW_DIR}: {', '.join(missing_files)}")
+        return None
+
+    # ==================================================
+    # 3️⃣ LOAD CONFIG FILES
     # ==================================================
 
     RULES_FILE = os.path.join(CONFIG_DIR, "business_rules.xlsx")
@@ -61,7 +85,7 @@ def process_tickets():
     )
 
     # ==================================================
-    # 3️⃣ COLUMN STANDARDIZATION
+    # 4️⃣ COLUMN STANDARDIZATION
     # ==================================================
 
     column_mapping_df.columns = column_mapping_df.columns.str.strip()
@@ -91,7 +115,6 @@ def process_tickets():
     ]
 
     def standardize_columns(df):
-
         df.columns = df.columns.str.strip()
         lower_cols = {col.lower(): col for col in df.columns}
 
@@ -111,23 +134,15 @@ def process_tickets():
         return df.loc[:, ~df.columns.duplicated()]
 
     # ==================================================
-    # 4️⃣ LOAD RAW FILES
+    # 5️⃣ LOAD RAW FILES
     # ==================================================
 
-    incident_df = standardize_columns(
-        pd.read_excel(os.path.join(RAW_DIR, "incident_jan_26.xlsx"))
-    )
-
-    ur_df = standardize_columns(
-        pd.read_excel(os.path.join(RAW_DIR, "ur_jan_26.xlsx"))
-    )
-
-    task_df = standardize_columns(
-        pd.read_excel(os.path.join(RAW_DIR, "task_jan_26.xlsx"))
-    )
+    incident_df = standardize_columns(pd.read_excel(incident_file))
+    ur_df = standardize_columns(pd.read_excel(ur_file))
+    task_df = standardize_columns(pd.read_excel(task_file))
 
     # ==================================================
-    # 5️⃣ BUSINESS FILTERS
+    # 6️⃣ BUSINESS FILTERS
     # ==================================================
 
     incident_df = incident_df[
@@ -159,15 +174,14 @@ def process_tickets():
     ]
 
     # ==================================================
-    # 6️⃣ ADD METADATA
+    # 7️⃣ ADD METADATA
     # ==================================================
 
     for df, ttype in [(incident_df, "Inc"), (ur_df, "UR"), (task_df, "Task")]:
         df["Ticket Type"] = ttype
-        df["Month"] = "Jan-26"
 
     # ==================================================
-    # 7️⃣ COMBINE
+    # 8️⃣ COMBINE
     # ==================================================
 
     end_user_tickets = pd.concat(
@@ -176,7 +190,7 @@ def process_tickets():
     )
 
     # ==================================================
-    # 8️⃣ CLEAN TEXT FIELDS
+    # 9️⃣ CLEAN TEXT FIELDS
     # ==================================================
 
     for col in ["Short description", "Description", "Service", "Category"]:
@@ -189,7 +203,48 @@ def process_tickets():
             )
 
     # ==================================================
-    # 9️⃣ PREPARE RULE LOGIC
+    # 🔟 DERIVE MONTH FROM OPENED COLUMN
+    # ==================================================
+
+    end_user_tickets["Opened"] = pd.to_datetime(
+        end_user_tickets["Opened"],
+        errors="coerce"
+    )
+
+    end_user_tickets["Month"] = end_user_tickets["Opened"].dt.strftime("%b-%y")
+
+    month_values = (
+        end_user_tickets["Month"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .unique()
+        .tolist()
+    )
+
+    if not month_values:
+        print("❌ Could not derive Month from 'Opened' column. Please check input data.")
+        return None
+
+    # STRICT VALIDATION: only one month allowed in input
+    if len(month_values) > 1:
+        print(f"❌ Multiple months detected in input data: {', '.join(sorted(month_values))}")
+        print(f"❌ Selected month folder: {run_month}")
+        print("❌ Please ensure only one month of ticket data is placed in the selected folder.")
+        return None
+
+    derived_month = month_values[0]
+
+    # CONSISTENCY CHECK: derived month must match selected folder
+    if derived_month != run_month:
+        print("❌ Mismatch detected.")
+        print(f"❌ Selected month folder: {run_month}")
+        print(f"❌ Derived month from 'Opened': {derived_month}")
+        print("❌ Please check the raw files and selected month folder.")
+        return None
+
+    # ==================================================
+    # 1️⃣1️⃣ PREPARE RULE LOGIC
     # ==================================================
 
     keyword_rules_df["Category"] = (
@@ -203,7 +258,6 @@ def process_tickets():
     category_priority = {}
 
     for _, row in keyword_rules_df.iterrows():
-
         category = row["Category"]
         keyword = row["Keyword"]
         priority = row["Priority"]
@@ -221,7 +275,6 @@ def process_tickets():
     category_phrases = {}
 
     for _, row in phrase_rules_df.iterrows():
-
         category = row["Category"]
         phrase = row["Phrase"]
         weight = row["Weight"]
@@ -229,7 +282,7 @@ def process_tickets():
         category_phrases.setdefault(category, []).append((phrase, weight))
 
     # ==================================================
-    # 🔟 LOAD CATEGORY & SERVICE RULES
+    # 1️⃣2️⃣ LOAD CATEGORY & SERVICE RULES
     # ==================================================
 
     category_rules_df["Category"] = (
@@ -255,7 +308,7 @@ def process_tickets():
     )
 
     # ==================================================
-    # 1️⃣1️⃣ LOAD FINAL CATEGORY CONSOLIDATION RULES
+    # 1️⃣3️⃣ LOAD FINAL CATEGORY CONSOLIDATION RULES
     # ==================================================
 
     final_category_consolidation_df.columns = (
@@ -289,7 +342,7 @@ def process_tickets():
     )
 
     # ==================================================
-    # 1️⃣2️⃣ TEMPLATE SANITIZATION
+    # 1️⃣4️⃣ TEMPLATE SANITIZATION
     # ==================================================
 
     template_noise_df["Phrase"] = (
@@ -305,7 +358,6 @@ def process_tickets():
     )
 
     def clean_description(text):
-
         cleaned = text
 
         for phrase in TEMPLATE_PHRASES:
@@ -319,7 +371,7 @@ def process_tickets():
     )
 
     # ==================================================
-    # 1️⃣3️⃣ WEIGHTED SCORING ENGINE
+    # 1️⃣5️⃣ WEIGHTED SCORING ENGINE
     # ==================================================
 
     MIN_SCORE_THRESHOLD = 1
@@ -332,14 +384,12 @@ def process_tickets():
         # -----------------------------
         # 1️⃣ CATEGORY OVERRIDE
         # -----------------------------
-
         if category_value in category_rules:
             return category_rules[category_value]
 
         # -----------------------------
         # 2️⃣ SERVICE MAPPING
         # -----------------------------
-
         if service_value:
             if service_value in service_category_map:
                 return service_category_map[service_value]
@@ -352,7 +402,6 @@ def process_tickets():
         # -----------------------------
         # 3️⃣ MICROSOFT TEAMS RULE
         # -----------------------------
-
         if "Microsoft Teams" in category_keywords:
             for keyword in category_keywords["Microsoft Teams"]:
                 if keyword in short_desc:
@@ -361,12 +410,6 @@ def process_tickets():
         combined_text = short_desc + " " + description
         scores = {}
 
-        # --------------------------------------------------
-        # STABILITY FIX:
-        # Evaluate categories from BOTH keyword rules
-        # and phrase rules, but in a stable sorted order
-        # --------------------------------------------------
-
         all_categories = sorted(
             set(category_keywords.keys()) | set(category_phrases.keys())
         )
@@ -374,7 +417,6 @@ def process_tickets():
         # -----------------------------
         # 4️⃣ WEIGHTED SCORING ENGINE
         # -----------------------------
-
         for category in all_categories:
 
             if category == "Microsoft Teams":
@@ -426,7 +468,7 @@ def process_tickets():
     )
 
     # ==================================================
-    # 1️⃣4️⃣ FINAL CATEGORY CONSOLIDATION
+    # 1️⃣6️⃣ FINAL CATEGORY CONSOLIDATION
     # ==================================================
 
     end_user_tickets["Ticket Category"] = (
@@ -437,24 +479,96 @@ def process_tickets():
     )
 
     # ==================================================
-    # 1️⃣5️⃣ FINAL OUTPUT
+    # 1️⃣7️⃣ FINAL OUTPUT PREPARATION
     # ==================================================
 
     final_columns = required_columns + [
         "Ticket Type", "Month", "Ticket Category"
     ]
 
-    end_user_tickets = end_user_tickets[final_columns]
+    end_user_tickets = end_user_tickets[final_columns].copy()
+
+    def remove_garbage_rows(df):
+        # Remove ServiceNow/Excel export artifact row
+        df = df[
+            ~df["Number"].astype(str).str.contains(
+                "Export stopped", case=False, na=False
+            )
+        ].copy()
+
+        # Remove fully blank rows
+        df = df.dropna(how="all")
+
+        # Remove structurally empty rows
+        df = df[
+            ~(
+                df["Number"].isna() &
+                df["Opened"].isna() &
+                (df["Short description"].astype(str).str.strip() == "") &
+                (df["Description"].astype(str).str.strip() == "")
+            )
+        ].copy()
+
+        return df
+
+    end_user_tickets = remove_garbage_rows(end_user_tickets)
 
     output_file = os.path.join(
         OUTPUT_DIR,
-        "end_user_ticket_data_jan-26.xlsx"
+        f"end_user_ticket_data_{run_month.lower()}.xlsx"
     )
+
+    master_file = os.path.join(
+        OUTPUT_DIR,
+        "master_ticket_data.xlsx"
+    )
+
+    # ==================================================
+    # 1️⃣8️⃣ SAVE MONTHLY OUTPUT
+    # ==================================================
 
     end_user_tickets.to_excel(output_file, index=False)
 
+    # ==================================================
+    # 1️⃣9️⃣ REBUILD MASTER FILE FROM MONTHLY OUTPUTS
+    # ==================================================
+
+    monthly_files = []
+
+    for file_name in os.listdir(OUTPUT_DIR):
+        if (
+            file_name.startswith("end_user_ticket_data_")
+            and file_name.endswith(".xlsx")
+        ):
+            monthly_files.append(os.path.join(OUTPUT_DIR, file_name))
+
+    monthly_files = sorted(monthly_files)
+
+    master_parts = []
+
+    for monthly_file in monthly_files:
+        df = pd.read_excel(monthly_file)
+        df = remove_garbage_rows(df)
+        master_parts.append(df)
+
+    if master_parts:
+        master_df = pd.concat(master_parts, ignore_index=True)
+    else:
+        master_df = pd.DataFrame(columns=end_user_tickets.columns)
+
+    # Remove duplicates across monthly files using ticket number
+    if "Number" in master_df.columns:
+        master_df = master_df.drop_duplicates(subset=["Number"], keep="last")
+
+    master_df = remove_garbage_rows(master_df)
+
+    master_df.to_excel(master_file, index=False)
+
     print("✅ Weighted scoring processing complete.")
     print("✅ Final category consolidation applied.")
-    print("Saved to:", output_file)
+    print("✅ Month derived from 'Opened' column.")
+    print("✅ Strict month validation passed.")
+    print("✅ Monthly output saved to:", output_file)
+    print("✅ Master file rebuilt from monthly outputs:", master_file)
 
     return end_user_tickets
