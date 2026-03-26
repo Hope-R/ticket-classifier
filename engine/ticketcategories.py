@@ -511,6 +511,38 @@ def process_tickets(run_month):
 
         return df
 
+    def sanitize_for_excel(df):
+        """
+        Make dataframe safe for Excel export:
+        1. Truncate text cells to Excel's 32767-character limit
+        2. Neutralize text starting with =, +, -, @ so Excel won't treat it as formula
+        """
+        text_columns = df.select_dtypes(include=["object"]).columns.tolist()
+
+        for col in text_columns:
+            df[col] = df[col].apply(sanitize_excel_cell)
+
+        return df
+
+    def sanitize_excel_cell(value):
+        if pd.isna(value):
+            return value
+
+        if not isinstance(value, str):
+            return value
+
+        text = value
+
+        # Excel cell limit
+        if len(text) > 32767:
+            text = text[:32767]
+
+        # Prevent Excel from interpreting as formula
+        if text.startswith(("=", "+", "-", "@")):
+            text = "'" + text
+
+        return text
+
     end_user_tickets = remove_garbage_rows(end_user_tickets)
 
     output_file = os.path.join(
@@ -527,7 +559,8 @@ def process_tickets(run_month):
     # 1️⃣8️⃣ SAVE MONTHLY OUTPUT
     # ==================================================
 
-    end_user_tickets.to_excel(output_file, index=False)
+    monthly_output_df = sanitize_for_excel(end_user_tickets.copy())
+    monthly_output_df.to_excel(output_file, index=False)
 
     # ==================================================
     # 1️⃣9️⃣ REBUILD MASTER FILE FROM MONTHLY OUTPUTS
@@ -562,12 +595,14 @@ def process_tickets(run_month):
 
     master_df = remove_garbage_rows(master_df)
 
-    master_df.to_excel(master_file, index=False)
+    master_output_df = sanitize_for_excel(master_df.copy())
+    master_output_df.to_excel(master_file, index=False)
 
     print("✅ Weighted scoring processing complete.")
     print("✅ Final category consolidation applied.")
     print("✅ Month derived from 'Opened' column.")
     print("✅ Strict month validation passed.")
+    print("✅ Excel-safe export sanitization applied.")
     print("✅ Monthly output saved to:", output_file)
     print("✅ Master file rebuilt from monthly outputs:", master_file)
 
