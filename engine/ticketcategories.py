@@ -226,26 +226,52 @@ def process_tickets(run_month):
     # 9️⃣ TEXT NORMALIZATION
     # ==================================================
 
-    def normalize_text(text):
+    def normalize_matching_text(text):
+        """
+        For fields used in keyword/phrase matching.
+        Lowercase + normalize whitespace.
+        """
         if pd.isna(text):
             return ""
 
         text = str(text)
-
-        # remove leading/trailing spaces
         text = text.strip()
-
-        # normalize tabs/newlines/multiple spaces to single space
         text = re.sub(r"\s+", " ", text)
-
-        # lowercase for consistent matching
         text = text.lower()
-
         return text
 
-    for col in ["Short description", "Description", "Service", "Category"]:
-        if col in end_user_tickets.columns:
-            end_user_tickets[col] = end_user_tickets[col].apply(normalize_text)
+    def normalize_exact_match_text(text):
+        """
+        For fields used in exact business-rule matching.
+        Preserve case, just clean whitespace.
+        """
+        if pd.isna(text):
+            return ""
+
+        text = str(text)
+        text = text.strip()
+        text = re.sub(r"\s+", " ", text)
+        return text
+
+    if "Short description" in end_user_tickets.columns:
+        end_user_tickets["Short description"] = (
+            end_user_tickets["Short description"].apply(normalize_matching_text)
+        )
+
+    if "Description" in end_user_tickets.columns:
+        end_user_tickets["Description"] = (
+            end_user_tickets["Description"].apply(normalize_matching_text)
+        )
+
+    if "Service" in end_user_tickets.columns:
+        end_user_tickets["Service"] = (
+            end_user_tickets["Service"].apply(normalize_exact_match_text)
+        )
+
+    if "Category" in end_user_tickets.columns:
+        end_user_tickets["Category"] = (
+            end_user_tickets["Category"].apply(normalize_exact_match_text)
+        )
 
     # ==================================================
     # 🔟 DERIVE MONTH FROM OPENED COLUMN
