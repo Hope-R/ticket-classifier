@@ -223,17 +223,29 @@ def process_tickets(run_month):
     )
 
     # ==================================================
-    # 9️⃣ CLEAN TEXT FIELDS
+    # 9️⃣ TEXT NORMALIZATION
     # ==================================================
+
+    def normalize_text(text):
+        if pd.isna(text):
+            return ""
+
+        text = str(text)
+
+        # remove leading/trailing spaces
+        text = text.strip()
+
+        # normalize tabs/newlines/multiple spaces to single space
+        text = re.sub(r"\s+", " ", text)
+
+        # lowercase for consistent matching
+        text = text.lower()
+
+        return text
 
     for col in ["Short description", "Description", "Service", "Category"]:
         if col in end_user_tickets.columns:
-            end_user_tickets[col] = (
-                end_user_tickets[col]
-                .fillna("")
-                .astype(str)
-                .str.strip()
-            )
+            end_user_tickets[col] = end_user_tickets[col].apply(normalize_text)
 
     # ==================================================
     # 🔟 DERIVE MONTH FROM OPENED COLUMN
@@ -636,6 +648,7 @@ def process_tickets(run_month):
     print("✅ Month derived from 'Opened' column.")
     print("✅ Strict month validation passed.")
     print("✅ Excel-safe export sanitization applied.")
+    print("✅ Raw input supports .xlsx and .csv.")
     print("✅ Monthly output saved to:", output_file)
     print("✅ Master file rebuilt from monthly outputs:", master_file)
 
