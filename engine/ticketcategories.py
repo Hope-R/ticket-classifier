@@ -24,18 +24,41 @@ def process_tickets(run_month):
         print(f"❌ Month folder not found: {MONTH_RAW_DIR}")
         return None
 
-    incident_file = os.path.join(MONTH_RAW_DIR, "incident.xlsx")
-    ur_file = os.path.join(MONTH_RAW_DIR, "ur.xlsx")
-    task_file = os.path.join(MONTH_RAW_DIR, "task.xlsx")
+    def resolve_input_file(folder_path, base_name):
+        """
+        Allow either .xlsx or .csv for raw input files.
+        Fail if none found or more than one found.
+        """
+        candidates = []
 
-    missing_files = []
+        xlsx_file = os.path.join(folder_path, f"{base_name}.xlsx")
+        csv_file = os.path.join(folder_path, f"{base_name}.csv")
 
-    for f in [incident_file, ur_file, task_file]:
-        if not os.path.exists(f):
-            missing_files.append(os.path.basename(f))
+        if os.path.exists(xlsx_file):
+            candidates.append(xlsx_file)
 
-    if missing_files:
-        print(f"❌ Missing raw data file(s) in {MONTH_RAW_DIR}: {', '.join(missing_files)}")
+        if os.path.exists(csv_file):
+            candidates.append(csv_file)
+
+        if len(candidates) == 0:
+            print(f"❌ Missing file for '{base_name}' in {folder_path}.")
+            print(f"   Expected one of: {base_name}.xlsx or {base_name}.csv")
+            return None
+
+        if len(candidates) > 1:
+            print(f"❌ Duplicate input files found for '{base_name}' in {folder_path}.")
+            print("   Please keep only one of the following:")
+            for c in candidates:
+                print(f"   - {os.path.basename(c)}")
+            return None
+
+        return candidates[0]
+
+    incident_file = resolve_input_file(MONTH_RAW_DIR, "incident")
+    ur_file = resolve_input_file(MONTH_RAW_DIR, "ur")
+    task_file = resolve_input_file(MONTH_RAW_DIR, "task")
+
+    if not all([incident_file, ur_file, task_file]):
         return None
 
     # ==================================================
@@ -137,9 +160,19 @@ def process_tickets(run_month):
     # 5️⃣ LOAD RAW FILES
     # ==================================================
 
-    incident_df = standardize_columns(pd.read_excel(incident_file))
-    ur_df = standardize_columns(pd.read_excel(ur_file))
-    task_df = standardize_columns(pd.read_excel(task_file))
+    def load_raw_file(file_path):
+        ext = os.path.splitext(file_path)[1].lower()
+
+        if ext == ".xlsx":
+            return pd.read_excel(file_path)
+        elif ext == ".csv":
+            return pd.read_csv(file_path)
+        else:
+            raise ValueError(f"Unsupported file format: {file_path}")
+
+    incident_df = standardize_columns(load_raw_file(incident_file))
+    ur_df = standardize_columns(load_raw_file(ur_file))
+    task_df = standardize_columns(load_raw_file(task_file))
 
     # ==================================================
     # 6️⃣ BUSINESS FILTERS
