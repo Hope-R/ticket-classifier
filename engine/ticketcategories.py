@@ -214,7 +214,7 @@ def process_tickets(run_month):
         else:
             raise ValueError(f"Unsupported file format: {file_path}")
 
-        df = df.applymap(canonicalize_scalar)
+        df = df.apply(lambda col: col.map(canonicalize_scalar))
 
         return df
 
