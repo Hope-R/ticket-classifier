@@ -62,6 +62,16 @@ def process_tickets(run_month):
         return None
 
     # ==================================================
+    # 2️⃣A CSV WARNING (WARNING-ONLY, NO PROMPT)
+    # ==================================================
+
+    if any(f.lower().endswith(".csv") for f in [incident_file, ur_file, task_file]):
+        print("\n⚠️ Input format guidance:")
+        print(".xlsx is the preferred raw input format.")
+        print(".csv is supported, but depending on the source export, it may introduce formatting differences.")
+        print("For the most consistent results, use .xlsx whenever available.\n")
+
+    # ==================================================
     # 3️⃣ LOAD CONFIG FILES
     # ==================================================
 
@@ -157,18 +167,56 @@ def process_tickets(run_month):
         return df.loc[:, ~df.columns.duplicated()]
 
     # ==================================================
-    # 5️⃣ LOAD RAW FILES
+    # 5️⃣ LOAD RAW FILES (CANONICAL INGESTION)
     # ==================================================
 
+    def canonicalize_scalar(value):
+        """
+        Canonical standard:
+        - Treat blank-like values consistently
+        - Preserve text content
+        - Strip leading/trailing spaces
+        """
+        if pd.isna(value):
+            return ""
+
+        if isinstance(value, str):
+            value = value.strip()
+
+            if value.lower() in {"nan", "none", "null"}:
+                return ""
+
+            return value
+
+        return value
+
     def load_raw_file(file_path):
+        """
+        Canonical ingestion layer:
+        - Read .xlsx and .csv in a controlled way
+        - Avoid pandas guessing types differently across formats
+        - Standardize blanks/strings before business logic runs
+        """
         ext = os.path.splitext(file_path)[1].lower()
 
         if ext == ".xlsx":
-            return pd.read_excel(file_path)
+            df = pd.read_excel(
+                file_path,
+                dtype=str,
+                keep_default_na=False
+            )
         elif ext == ".csv":
-            return pd.read_csv(file_path)
+            df = pd.read_csv(
+                file_path,
+                dtype=str,
+                keep_default_na=False
+            )
         else:
             raise ValueError(f"Unsupported file format: {file_path}")
+
+        df = df.applymap(canonicalize_scalar)
+
+        return df
 
     incident_df = standardize_columns(load_raw_file(incident_file))
     ur_df = standardize_columns(load_raw_file(ur_file))
@@ -675,6 +723,7 @@ def process_tickets(run_month):
     print("✅ Strict month validation passed.")
     print("✅ Excel-safe export sanitization applied.")
     print("✅ Raw input supports .xlsx and .csv.")
+    print("✅ Canonical ingestion applied.")
     print("✅ Monthly output saved to:", output_file)
     print("✅ Master file rebuilt from monthly outputs:", master_file)
 
