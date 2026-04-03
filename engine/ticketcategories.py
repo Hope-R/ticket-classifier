@@ -136,7 +136,7 @@ def process_tickets(run_month):
 
     column_aliases = (
         column_mapping_df
-        .groupby("Standard Column")["Possible Column Name"]
+        .groupby("Standard Column", sort=True)["Possible Column Name"]
         .apply(list)
         .to_dict()
     )
@@ -170,17 +170,45 @@ def process_tickets(run_month):
     # 5️⃣ LOAD RAW FILES (CANONICAL INGESTION)
     # ==================================================
 
+    def normalize_invisible_chars(text):
+        """
+        Normalize invisible / special whitespace characters that often
+        differ between Excel and CSV exports.
+        """
+        if pd.isna(text):
+            return ""
+
+        text = str(text)
+
+        replacements = {
+            "\u00A0": " ",   # non-breaking space
+            "\u2007": " ",   # figure space
+            "\u202F": " ",   # narrow no-break space
+            "\u200B": "",    # zero-width space
+            "\u200C": "",    # zero-width non-joiner
+            "\u200D": "",    # zero-width joiner
+            "\u2060": "",    # word joiner
+            "\uFEFF": "",    # BOM / zero-width no-break space
+        }
+
+        for bad, good in replacements.items():
+            text = text.replace(bad, good)
+
+        return text
+
     def canonicalize_scalar(value):
         """
         Canonical standard:
         - Treat blank-like values consistently
         - Preserve text content
         - Strip leading/trailing spaces
+        - Normalize hidden/invisible characters
         """
         if pd.isna(value):
             return ""
 
         if isinstance(value, str):
+            value = normalize_invisible_chars(value)
             value = value.strip()
 
             if value.lower() in {"nan", "none", "null"}:
@@ -280,13 +308,13 @@ def process_tickets(run_month):
         - Keep original case
         - Keep line breaks
         - Keep internal spacing structure
-        - Normalize line endings only
+        - Normalize invisible chars and line endings only
         - Strip only outer whitespace
         """
         if pd.isna(text):
             return ""
 
-        text = str(text)
+        text = normalize_invisible_chars(text)
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         text = text.strip()
 
@@ -298,13 +326,13 @@ def process_tickets(run_month):
     def normalize_matching_text(text):
         """
         For fields used in keyword/phrase matching.
-        Lowercase + normalize whitespace.
+        Lowercase + normalize whitespace + normalize invisible chars.
         """
         if pd.isna(text):
             return ""
 
-        text = str(text)
-        text = text.strip()
+        text = normalize_invisible_chars(text)
+        text = str(text).strip()
         text = re.sub(r"\s+", " ", text)
         text = text.lower()
         return text
@@ -318,8 +346,8 @@ def process_tickets(run_month):
         if pd.isna(text):
             return ""
 
-        text = str(text)
-        text = text.strip()
+        text = normalize_invisible_chars(text)
+        text = str(text).strip()
         text = re.sub(r"\s+", " ", text)
         text = text.lower()
         return text
@@ -400,7 +428,6 @@ def process_tickets(run_month):
         print("❌ Could not derive Month from 'Opened' column. Please check input data.")
         return None
 
-    # STRICT VALIDATION: only one month allowed in input
     if len(month_values) > 1:
         print(f"❌ Multiple months detected in input data: {', '.join(sorted(month_values))}")
         print(f"❌ Selected month folder: {run_month}")
@@ -409,7 +436,6 @@ def process_tickets(run_month):
 
     derived_month = month_values[0]
 
-    # CONSISTENCY CHECK: derived month must match selected folder
     if derived_month != run_month:
         print("❌ Mismatch detected.")
         print(f"❌ Selected month folder: {run_month}")
@@ -428,16 +454,32 @@ def process_tickets(run_month):
         keyword_rules_df["Keyword"].astype(str).str.lower().str.strip()
     )
 
+    keyword_rules_df["Priority"] = pd.to_numeric(
+        keyword_rules_df["Priority"],
+        errors="coerce"
+    ).fillna(999)
+
+    keyword_rules_df = keyword_rules_df.sort_values(
+        by=["Category", "Keyword", "Priority"],
+        kind="stable"
+    ).reset_index(drop=True)
+
     category_keywords = {}
     category_priority = {}
 
     for _, row in keyword_rules_df.iterrows():
         category = row["Category"]
         keyword = row["Keyword"]
-        priority = row["Priority"]
+        priority = int(row["Priority"])
 
         category_keywords.setdefault(category, []).append(keyword)
-        category_priority[category] = priority
+        category_priority[category] = min(
+            priority,
+            category_priority.get(category, 999)
+        )
+
+    for category in category_keywords:
+        category_keywords[category] = sorted(set(category_keywords[category]))
 
     phrase_rules_df["Category"] = (
         phrase_rules_df["Category"].astype(str).str.strip()
@@ -445,6 +487,15 @@ def process_tickets(run_month):
     phrase_rules_df["Phrase"] = (
         phrase_rules_df["Phrase"].astype(str).str.lower().str.strip()
     )
+    phrase_rules_df["Weight"] = pd.to_numeric(
+        phrase_rules_df["Weight"],
+        errors="coerce"
+    ).fillna(0)
+
+    phrase_rules_df = phrase_rules_df.sort_values(
+        by=["Category", "Phrase", "Weight"],
+        kind="stable"
+    ).reset_index(drop=True)
 
     category_phrases = {}
 
@@ -454,6 +505,12 @@ def process_tickets(run_month):
         weight = row["Weight"]
 
         category_phrases.setdefault(category, []).append((phrase, weight))
+
+    for category in category_phrases:
+        category_phrases[category] = sorted(
+            category_phrases[category],
+            key=lambda x: (x[0], x[1])
+        )
 
     # ==================================================
     # 1️⃣2️⃣ LOAD CATEGORY & SERVICE RULES
@@ -465,6 +522,11 @@ def process_tickets(run_month):
     category_rules_df["Mapped Category"] = (
         category_rules_df["Mapped Category"].astype(str).str.strip()
     )
+
+    category_rules_df = category_rules_df.sort_values(
+        by=["Category", "Mapped Category"],
+        kind="stable"
+    ).reset_index(drop=True)
 
     category_rules = dict(
         zip(category_rules_df["Category"], category_rules_df["Mapped Category"])
@@ -478,6 +540,11 @@ def process_tickets(run_month):
     service_rules_df["Category"] = (
         service_rules_df["Category"].astype(str).str.strip()
     )
+
+    service_rules_df = service_rules_df.sort_values(
+        by=["Service", "Category"],
+        kind="stable"
+    ).reset_index(drop=True)
 
     service_category_map = dict(
         zip(service_rules_df["Service"], service_rules_df["Category"])
@@ -514,6 +581,11 @@ def process_tickets(run_month):
         final_category_consolidation_df["Old Category Name"].apply(normalize_canonical_key)
     )
 
+    final_category_consolidation_df = final_category_consolidation_df.sort_values(
+        by=["Old Category Name_canonical", "Final Mapped Category"],
+        kind="stable"
+    ).reset_index(drop=True)
+
     final_category_map = dict(
         zip(
             final_category_consolidation_df["Old Category Name_canonical"],
@@ -528,8 +600,14 @@ def process_tickets(run_month):
     template_noise_df["Phrase"] = (
         template_noise_df["Phrase"]
         .astype(str)
+        .apply(normalize_invisible_chars)
         .str.strip()
     )
+
+    template_noise_df = template_noise_df.sort_values(
+        by=["Phrase"],
+        kind="stable"
+    ).reset_index(drop=True)
 
     TEMPLATE_PHRASES = (
         template_noise_df["Phrase"]
@@ -583,7 +661,7 @@ def process_tickets(run_month):
         # 3️⃣ MICROSOFT TEAMS RULE
         # -----------------------------
         if "Microsoft Teams" in category_keywords:
-            for keyword in category_keywords["Microsoft Teams"]:
+            for keyword in sorted(category_keywords["Microsoft Teams"]):
                 if keyword in short_desc:
                     return "Microsoft Teams"
 
@@ -610,7 +688,7 @@ def process_tickets(run_month):
                     phrase_score += weight
 
             for keyword in category_keywords.get(category, []):
-                pattern = r'\b' + re.escape(keyword) + r'\b'
+                pattern = r"\b" + re.escape(keyword) + r"\b"
                 if re.search(pattern, combined_text):
                     keyword_score += 1
 
@@ -640,8 +718,8 @@ def process_tickets(run_month):
 
         if best_data["total"] >= MIN_SCORE_THRESHOLD:
             return best_category
-        else:
-            return "Others"
+
+        return "Others"
 
     end_user_tickets["Ticket Category"] = (
         end_user_tickets.apply(determine_category, axis=1)
@@ -673,17 +751,14 @@ def process_tickets(run_month):
     end_user_tickets = end_user_tickets[final_columns].copy()
 
     def remove_garbage_rows(df):
-        # Remove ServiceNow/Excel export artifact row
         df = df[
             ~df["Number"].astype(str).str.contains(
                 "Export stopped", case=False, na=False
             )
         ].copy()
 
-        # Remove fully blank rows
         df = df.dropna(how="all")
 
-        # Remove structurally empty rows
         df = df[
             ~(
                 df["Number"].isna() &
@@ -692,19 +767,6 @@ def process_tickets(run_month):
                 (df["Description"].astype(str).str.strip() == "")
             )
         ].copy()
-
-        return df
-
-    def sanitize_for_excel(df):
-        """
-        Make dataframe safe for Excel export:
-        1. Truncate text cells to Excel's 32767-character limit
-        2. Neutralize text starting with =, +, -, @ so Excel won't treat it as formula
-        """
-        text_columns = df.select_dtypes(include=["object"]).columns.tolist()
-
-        for col in text_columns:
-            df[col] = df[col].apply(sanitize_excel_cell)
 
         return df
 
@@ -717,15 +779,21 @@ def process_tickets(run_month):
 
         text = value
 
-        # Excel cell limit
         if len(text) > 32767:
             text = text[:32767]
 
-        # Prevent Excel from interpreting as formula
         if text.startswith(("=", "+", "-", "@")):
             text = "'" + text
 
         return text
+
+    def sanitize_for_excel(df):
+        text_columns = df.select_dtypes(include=["object"]).columns.tolist()
+
+        for col in text_columns:
+            df[col] = df[col].apply(sanitize_excel_cell)
+
+        return df
 
     end_user_tickets = remove_garbage_rows(end_user_tickets)
 
@@ -773,7 +841,6 @@ def process_tickets(run_month):
     else:
         master_df = pd.DataFrame(columns=end_user_tickets.columns)
 
-    # Remove duplicates across monthly files using ticket number
     if "Number" in master_df.columns:
         master_df = master_df.drop_duplicates(subset=["Number"], keep="last")
 
@@ -791,6 +858,8 @@ def process_tickets(run_month):
     print("✅ Canonical ingestion applied.")
     print("✅ Original text preserved in output.")
     print("✅ Canonical helper fields used for matching logic.")
+    print("✅ Deterministic rule ordering applied.")
+    print("✅ Hidden character normalization applied.")
     print("✅ Service mapping uses canonical in-memory matching.")
     print("✅ Final category consolidation uses canonical in-memory matching.")
     print("✅ Monthly output saved to:", output_file)
