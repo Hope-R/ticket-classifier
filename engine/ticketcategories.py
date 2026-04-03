@@ -883,6 +883,7 @@ def process_tickets(run_month):
         "Service_canonical",
         "Short description",
         "Short description_canonical",
+        "Description"
         "Description_clean",
         "Ticket Category",
         "Decision Path",
@@ -972,7 +973,6 @@ def process_tickets(run_month):
         return df
 
     final_output_df = remove_garbage_rows(final_output_df)
-    debug_output_df = remove_garbage_rows(debug_output_df)
 
     output_file = os.path.join(
         OUTPUT_DIR,
