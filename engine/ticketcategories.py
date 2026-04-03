@@ -6,6 +6,61 @@ import pandas as pd
 def process_tickets(run_month):
 
     # ==================================================
+    # 0️⃣ DEBUG TICKETS TO TRACE
+    # ==================================================
+
+    DEBUG_TICKETS = {
+        "INC37879772",
+        "INC37879243",
+        "INC37878403",
+        "INC37878275",
+        "INC37877856",
+        "INC37877563",
+        "INC37877432",
+        "INC37877282",
+        "INC37875074",
+        "INC37874948",
+        "INC37874852",
+        "INC37874816",
+        "INC37874299",
+        "INC37873154",
+        "INC37873081",
+        "INC37872408",
+        "INC37872391",
+        "INC37872248",
+        "INC37870950",
+        "INC37870579",
+        "INC37870545",
+        "INC37870539",
+        "INC37870288",
+        "INC37869740",
+        "INC37869602",
+        "INC37868772",
+        "INC37868735",
+        "INC37868571",
+        "INC37868333",
+        "INC37867710",
+        "INC37867616",
+        "INC37861931",
+        "INC37860178",
+        "INC37859509",
+        "INC37859119",
+        "INC37859042",
+        "INC37858940",
+        "INC37858895",
+        "INC37858741",
+        "INC37858113",
+        "INC37857995",
+        "UR1400768",
+        "UR1404927",
+        "UR1404967",
+        "UR1406682",
+        "UR1407327",
+        "UR1408879",
+        "UR1415130",
+    }
+
+    # ==================================================
     # 1️⃣ BASE PATHS
     # ==================================================
 
@@ -627,14 +682,34 @@ def process_tickets(run_month):
     end_user_tickets["Description_clean"] = (
         end_user_tickets["Description_canonical"].apply(clean_description)
     )
-
-    # ==================================================
-    # 1️⃣5️⃣ WEIGHTED SCORING ENGINE
+        # ==================================================
+    # 1️⃣5️⃣ WEIGHTED SCORING ENGINE + DEBUG TRACE
     # ==================================================
 
     MIN_SCORE_THRESHOLD = 1
 
-    def determine_category(row):
+    def determine_category_with_trace(row):
+
+        trace = {
+            "Decision Path": "",
+            "Category Override Match": "",
+            "Service Rule Match": "",
+            "Service Fallback Used": "No",
+            "Microsoft Teams Match": "No",
+            "Top Candidate 1": "",
+            "Top Candidate 1 Score": "",
+            "Top Candidate 1 Phrase Score": "",
+            "Top Candidate 1 Priority": "",
+            "Top Candidate 2": "",
+            "Top Candidate 2 Score": "",
+            "Top Candidate 2 Phrase Score": "",
+            "Top Candidate 2 Priority": "",
+            "Top Candidate 3": "",
+            "Top Candidate 3 Score": "",
+            "Top Candidate 3 Phrase Score": "",
+            "Top Candidate 3 Priority": "",
+            "All Candidate Scores": ""
+        }
 
         category_value = str(row.get("Category_canonical", "")).strip()
         service_value = str(row.get("Service_canonical", "")).strip()
@@ -643,16 +718,25 @@ def process_tickets(run_month):
         # 1️⃣ CATEGORY OVERRIDE
         # -----------------------------
         if category_value in category_rules:
-            return category_rules[category_value]
+            winning_category = category_rules[category_value]
+            trace["Decision Path"] = "category_override"
+            trace["Category Override Match"] = winning_category
+            return winning_category, trace
 
         # -----------------------------
-        # 2️⃣ SERVICE MAPPING
+        # 2️⃣ SERVICE MAPPING / FALLBACK
         # -----------------------------
         if service_value:
             if service_value in service_category_map:
-                return service_category_map[service_value]
+                winning_category = service_category_map[service_value]
+                trace["Decision Path"] = "service_mapping"
+                trace["Service Rule Match"] = winning_category
+                return winning_category, trace
             else:
-                return str(row.get("Service", "")).strip()
+                winning_category = str(row.get("Service", "")).strip()
+                trace["Decision Path"] = "service_fallback"
+                trace["Service Fallback Used"] = "Yes"
+                return winning_category, trace
 
         short_desc = str(row.get("Short description_canonical", "")).strip()
         description = str(row.get("Description_clean", "")).strip()
@@ -663,7 +747,9 @@ def process_tickets(run_month):
         if "Microsoft Teams" in category_keywords:
             for keyword in sorted(category_keywords["Microsoft Teams"]):
                 if keyword in short_desc:
-                    return "Microsoft Teams"
+                    trace["Decision Path"] = "microsoft_teams"
+                    trace["Microsoft Teams Match"] = "Yes"
+                    return "Microsoft Teams", trace
 
         combined_text = short_desc + " " + description
         scores = {}
@@ -702,7 +788,8 @@ def process_tickets(run_month):
                 }
 
         if not scores:
-            return "Others"
+            trace["Decision Path"] = "weighted_scoring_no_match"
+            return "Others", trace
 
         sorted_categories = sorted(
             scores.items(),
@@ -714,15 +801,51 @@ def process_tickets(run_month):
             )
         )
 
+        trace["Decision Path"] = "weighted_scoring"
+
+        if len(sorted_categories) >= 1:
+            trace["Top Candidate 1"] = sorted_categories[0][0]
+            trace["Top Candidate 1 Score"] = sorted_categories[0][1]["total"]
+            trace["Top Candidate 1 Phrase Score"] = sorted_categories[0][1]["phrase"]
+            trace["Top Candidate 1 Priority"] = sorted_categories[0][1]["priority"]
+
+        if len(sorted_categories) >= 2:
+            trace["Top Candidate 2"] = sorted_categories[1][0]
+            trace["Top Candidate 2 Score"] = sorted_categories[1][1]["total"]
+            trace["Top Candidate 2 Phrase Score"] = sorted_categories[1][1]["phrase"]
+            trace["Top Candidate 2 Priority"] = sorted_categories[1][1]["priority"]
+
+        if len(sorted_categories) >= 3:
+            trace["Top Candidate 3"] = sorted_categories[2][0]
+            trace["Top Candidate 3 Score"] = sorted_categories[2][1]["total"]
+            trace["Top Candidate 3 Phrase Score"] = sorted_categories[2][1]["phrase"]
+            trace["Top Candidate 3 Priority"] = sorted_categories[2][1]["priority"]
+
+        trace["All Candidate Scores"] = " | ".join(
+            [
+                f"{cat}: total={data['total']}, phrase={data['phrase']}, priority={data['priority']}"
+                for cat, data in sorted_categories
+            ]
+        )
+
         best_category, best_data = sorted_categories[0]
 
         if best_data["total"] >= MIN_SCORE_THRESHOLD:
-            return best_category
+            return best_category, trace
 
-        return "Others"
+        return "Others", trace
 
-    end_user_tickets["Ticket Category"] = (
-        end_user_tickets.apply(determine_category, axis=1)
+    category_trace_results = end_user_tickets.apply(
+        determine_category_with_trace,
+        axis=1
+    )
+
+    end_user_tickets["Ticket Category"] = category_trace_results.apply(lambda x: x[0])
+    debug_trace_df = pd.DataFrame(category_trace_results.apply(lambda x: x[1]).tolist())
+
+    end_user_tickets = pd.concat(
+        [end_user_tickets.reset_index(drop=True), debug_trace_df.reset_index(drop=True)],
+        axis=1
     )
 
     # ==================================================
@@ -741,14 +864,67 @@ def process_tickets(run_month):
     )
 
     # ==================================================
-    # 1️⃣7️⃣ FINAL OUTPUT PREPARATION
+    # 1️⃣7️⃣ DEBUG FILE PREPARATION
+    # ==================================================
+
+    debug_columns = [
+        "Number",
+        "Ticket Type",
+        "Opened",
+        "Month",
+        "Caller",
+        "Email",
+        "Contact type",
+        "Assignment group",
+        "Priority",
+        "Category",
+        "Category_canonical",
+        "Service",
+        "Service_canonical",
+        "Short description",
+        "Short description_canonical",
+        "Description_clean",
+        "Ticket Category",
+        "Decision Path",
+        "Category Override Match",
+        "Service Rule Match",
+        "Service Fallback Used",
+        "Microsoft Teams Match",
+        "Top Candidate 1",
+        "Top Candidate 1 Score",
+        "Top Candidate 1 Phrase Score",
+        "Top Candidate 1 Priority",
+        "Top Candidate 2",
+        "Top Candidate 2 Score",
+        "Top Candidate 2 Phrase Score",
+        "Top Candidate 2 Priority",
+        "Top Candidate 3",
+        "Top Candidate 3 Score",
+        "Top Candidate 3 Phrase Score",
+        "Top Candidate 3 Priority",
+        "All Candidate Scores"
+    ]
+
+    debug_output_df = end_user_tickets[
+        end_user_tickets["Number"].astype(str).isin(DEBUG_TICKETS)
+    ].copy()
+
+    debug_output_df = debug_output_df[debug_columns].copy()
+
+    debug_file = os.path.join(
+        OUTPUT_DIR,
+        f"debug_ticket_trace_{run_month.lower()}.xlsx"
+    )
+
+    # ==================================================
+    # 1️⃣8️⃣ FINAL OUTPUT PREPARATION
     # ==================================================
 
     final_columns = required_columns + [
         "Ticket Type", "Month", "Ticket Category"
     ]
 
-    end_user_tickets = end_user_tickets[final_columns].copy()
+    final_output_df = end_user_tickets[final_columns].copy()
 
     def remove_garbage_rows(df):
         df = df[
@@ -795,7 +971,8 @@ def process_tickets(run_month):
 
         return df
 
-    end_user_tickets = remove_garbage_rows(end_user_tickets)
+    final_output_df = remove_garbage_rows(final_output_df)
+    debug_output_df = remove_garbage_rows(debug_output_df)
 
     output_file = os.path.join(
         OUTPUT_DIR,
@@ -808,14 +985,17 @@ def process_tickets(run_month):
     )
 
     # ==================================================
-    # 1️⃣8️⃣ SAVE MONTHLY OUTPUT
+    # 1️⃣9️⃣ SAVE MONTHLY OUTPUT + DEBUG OUTPUT
     # ==================================================
 
-    monthly_output_df = sanitize_for_excel(end_user_tickets.copy())
+    monthly_output_df = sanitize_for_excel(final_output_df.copy())
     monthly_output_df.to_excel(output_file, index=False)
 
+    debug_output_export_df = sanitize_for_excel(debug_output_df.copy())
+    debug_output_export_df.to_excel(debug_file, index=False)
+
     # ==================================================
-    # 1️⃣9️⃣ REBUILD MASTER FILE FROM MONTHLY OUTPUTS
+    # 2️⃣0️⃣ REBUILD MASTER FILE FROM MONTHLY OUTPUTS
     # ==================================================
 
     monthly_files = []
@@ -839,7 +1019,7 @@ def process_tickets(run_month):
     if master_parts:
         master_df = pd.concat(master_parts, ignore_index=True)
     else:
-        master_df = pd.DataFrame(columns=end_user_tickets.columns)
+        master_df = pd.DataFrame(columns=final_output_df.columns)
 
     if "Number" in master_df.columns:
         master_df = master_df.drop_duplicates(subset=["Number"], keep="last")
@@ -858,11 +1038,9 @@ def process_tickets(run_month):
     print("✅ Canonical ingestion applied.")
     print("✅ Original text preserved in output.")
     print("✅ Canonical helper fields used for matching logic.")
-    print("✅ Deterministic rule ordering applied.")
-    print("✅ Hidden character normalization applied.")
-    print("✅ Service mapping uses canonical in-memory matching.")
-    print("✅ Final category consolidation uses canonical in-memory matching.")
+    print("✅ Debug trace file created for selected tickets.")
     print("✅ Monthly output saved to:", output_file)
+    print("✅ Debug output saved to:", debug_file)
     print("✅ Master file rebuilt from monthly outputs:", master_file)
 
-    return end_user_tickets
+    return final_output_df
