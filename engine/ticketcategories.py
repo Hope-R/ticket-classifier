@@ -271,8 +271,29 @@ def process_tickets(run_month):
     )
 
     # ==================================================
-    # 9️⃣ TEXT NORMALIZATION
+    # 9️⃣ TEXT NORMALIZATION / CANONICAL HELPERS
     # ==================================================
+
+    def preserve_display_text(text):
+        """
+        Preserve business-facing/output text.
+        - Keep original case
+        - Keep line breaks
+        - Keep internal spacing structure
+        - Normalize line endings only
+        - Strip only outer whitespace
+        """
+        if pd.isna(text):
+            return ""
+
+        text = str(text)
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        text = text.strip()
+
+        if text.lower() in {"nan", "none", "null"}:
+            return ""
+
+        return text
 
     def normalize_matching_text(text):
         """
@@ -288,10 +309,11 @@ def process_tickets(run_month):
         text = text.lower()
         return text
 
-    def normalize_exact_match_text(text):
+    def normalize_canonical_key(text):
         """
-        For fields used in exact business-rule matching.
-        Preserve case, just clean whitespace.
+        For controlled exact-match keys where we want
+        in-memory canonical matching without changing
+        business-facing values.
         """
         if pd.isna(text):
             return ""
@@ -299,27 +321,60 @@ def process_tickets(run_month):
         text = str(text)
         text = text.strip()
         text = re.sub(r"\s+", " ", text)
+        text = text.lower()
         return text
 
+    # Preserve original business-facing columns
     if "Short description" in end_user_tickets.columns:
         end_user_tickets["Short description"] = (
+            end_user_tickets["Short description"].apply(preserve_display_text)
+        )
+        end_user_tickets["Short description_canonical"] = (
             end_user_tickets["Short description"].apply(normalize_matching_text)
         )
+    else:
+        end_user_tickets["Short description"] = ""
+        end_user_tickets["Short description_canonical"] = ""
 
     if "Description" in end_user_tickets.columns:
         end_user_tickets["Description"] = (
+            end_user_tickets["Description"].apply(preserve_display_text)
+        )
+        end_user_tickets["Description_canonical"] = (
             end_user_tickets["Description"].apply(normalize_matching_text)
         )
+    else:
+        end_user_tickets["Description"] = ""
+        end_user_tickets["Description_canonical"] = ""
+
+    if "Close notes" in end_user_tickets.columns:
+        end_user_tickets["Close notes"] = (
+            end_user_tickets["Close notes"].apply(preserve_display_text)
+        )
+    else:
+        end_user_tickets["Close notes"] = ""
 
     if "Service" in end_user_tickets.columns:
         end_user_tickets["Service"] = (
-            end_user_tickets["Service"].apply(normalize_exact_match_text)
+            end_user_tickets["Service"].apply(preserve_display_text)
         )
+        end_user_tickets["Service_canonical"] = (
+            end_user_tickets["Service"].apply(normalize_canonical_key)
+        )
+    else:
+        end_user_tickets["Service"] = ""
+        end_user_tickets["Service_canonical"] = ""
 
     if "Category" in end_user_tickets.columns:
         end_user_tickets["Category"] = (
-            end_user_tickets["Category"].apply(normalize_exact_match_text)
+            end_user_tickets["Category"].apply(preserve_display_text)
         )
+        end_user_tickets["Category_canonical"] = (
+            end_user_tickets["Category"].apply(normalize_canonical_key)
+        )
+    else:
+        end_user_tickets["Category"] = ""
+        end_user_tickets["Category_canonical"] = ""
 
     # ==================================================
     # 🔟 DERIVE MONTH FROM OPENED COLUMN
@@ -416,7 +471,9 @@ def process_tickets(run_month):
     )
 
     service_rules_df["Service"] = (
-        service_rules_df["Service"].astype(str).str.strip()
+        service_rules_df["Service"]
+        .astype(str)
+        .apply(normalize_canonical_key)
     )
     service_rules_df["Category"] = (
         service_rules_df["Category"].astype(str).str.strip()
@@ -451,11 +508,15 @@ def process_tickets(run_month):
     final_category_consolidation_df = final_category_consolidation_df[
         (final_category_consolidation_df["Old Category Name"] != "") &
         (final_category_consolidation_df["Final Mapped Category"] != "")
-    ]
+    ].copy()
+
+    final_category_consolidation_df["Old Category Name_canonical"] = (
+        final_category_consolidation_df["Old Category Name"].apply(normalize_canonical_key)
+    )
 
     final_category_map = dict(
         zip(
-            final_category_consolidation_df["Old Category Name"],
+            final_category_consolidation_df["Old Category Name_canonical"],
             final_category_consolidation_df["Final Mapped Category"]
         )
     )
@@ -486,7 +547,7 @@ def process_tickets(run_month):
         return cleaned
 
     end_user_tickets["Description_clean"] = (
-        end_user_tickets["Description"].apply(clean_description)
+        end_user_tickets["Description_canonical"].apply(clean_description)
     )
 
     # ==================================================
@@ -497,8 +558,8 @@ def process_tickets(run_month):
 
     def determine_category(row):
 
-        category_value = str(row.get("Category", "")).lower().strip()
-        service_value = str(row.get("Service", "")).strip()
+        category_value = str(row.get("Category_canonical", "")).strip()
+        service_value = str(row.get("Service_canonical", "")).strip()
 
         # -----------------------------
         # 1️⃣ CATEGORY OVERRIDE
@@ -513,10 +574,10 @@ def process_tickets(run_month):
             if service_value in service_category_map:
                 return service_category_map[service_value]
             else:
-                return service_value
+                return str(row.get("Service", "")).strip()
 
-        short_desc = str(row.get("Short description", "")).lower().strip()
-        description = str(row.get("Description_clean", "")).lower().strip()
+        short_desc = str(row.get("Short description_canonical", "")).strip()
+        description = str(row.get("Description_clean", "")).strip()
 
         # -----------------------------
         # 3️⃣ MICROSOFT TEAMS RULE
@@ -594,7 +655,11 @@ def process_tickets(run_month):
         end_user_tickets["Ticket Category"]
         .astype(str)
         .str.strip()
-        .replace(final_category_map)
+    )
+
+    end_user_tickets["Ticket Category"] = (
+        end_user_tickets["Ticket Category"]
+        .apply(lambda x: final_category_map.get(normalize_canonical_key(x), x))
     )
 
     # ==================================================
@@ -724,6 +789,10 @@ def process_tickets(run_month):
     print("✅ Excel-safe export sanitization applied.")
     print("✅ Raw input supports .xlsx and .csv.")
     print("✅ Canonical ingestion applied.")
+    print("✅ Original text preserved in output.")
+    print("✅ Canonical helper fields used for matching logic.")
+    print("✅ Service mapping uses canonical in-memory matching.")
+    print("✅ Final category consolidation uses canonical in-memory matching.")
     print("✅ Monthly output saved to:", output_file)
     print("✅ Master file rebuilt from monthly outputs:", master_file)
 
