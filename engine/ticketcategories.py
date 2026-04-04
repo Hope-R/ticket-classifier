@@ -325,30 +325,23 @@ def process_tickets(run_month):
 
     def normalize_matching_text(text):
         """
-        Strong normalization for keyword/phrase matching so XLSX and CSV
-        behave the same in-memory.
+        For fields used in keyword/phrase matching.
+        Lowercase + normalize whitespace + normalize invisible chars.
         """
         if pd.isna(text):
             return ""
 
         text = normalize_invisible_chars(text)
-        text = str(text)
-
-        # Normalize line breaks / tabs
-        text = text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ").replace("\t", " ")
-
-        # Replace punctuation/symbols with spaces but keep word chars
-        text = re.sub(r"[^\w\s]", " ", text)
-
-        # Normalize spaces
+        text = str(text).strip()
         text = re.sub(r"\s+", " ", text)
-
-        return text.strip().lower()
+        text = text.lower()
+        return text
 
     def normalize_canonical_key(text):
         """
-        For controlled exact-match keys where we want in-memory canonical
-        matching without changing business-facing values.
+        For controlled exact-match keys where we want
+        in-memory canonical matching without changing
+        business-facing values.
         """
         if pd.isna(text):
             return ""
@@ -458,9 +451,7 @@ def process_tickets(run_month):
         keyword_rules_df["Category"].astype(str).str.strip()
     )
     keyword_rules_df["Keyword"] = (
-        keyword_rules_df["Keyword"]
-        .astype(str)
-        .apply(normalize_matching_text)
+        keyword_rules_df["Keyword"].astype(str).str.lower().str.strip()
     )
 
     keyword_rules_df["Priority"] = pd.to_numeric(
@@ -481,9 +472,6 @@ def process_tickets(run_month):
         keyword = row["Keyword"]
         priority = int(row["Priority"])
 
-        if keyword == "":
-            continue
-
         category_keywords.setdefault(category, []).append(keyword)
         category_priority[category] = min(
             priority,
@@ -497,9 +485,7 @@ def process_tickets(run_month):
         phrase_rules_df["Category"].astype(str).str.strip()
     )
     phrase_rules_df["Phrase"] = (
-        phrase_rules_df["Phrase"]
-        .astype(str)
-        .apply(normalize_matching_text)
+        phrase_rules_df["Phrase"].astype(str).str.lower().str.strip()
     )
     phrase_rules_df["Weight"] = pd.to_numeric(
         phrase_rules_df["Weight"],
@@ -517,9 +503,6 @@ def process_tickets(run_month):
         category = row["Category"]
         phrase = row["Phrase"]
         weight = row["Weight"]
-
-        if phrase == "":
-            continue
 
         category_phrases.setdefault(category, []).append((phrase, weight))
 
@@ -617,10 +600,9 @@ def process_tickets(run_month):
     template_noise_df["Phrase"] = (
         template_noise_df["Phrase"]
         .astype(str)
-        .apply(normalize_matching_text)
+        .apply(normalize_invisible_chars)
+        .str.strip()
     )
-
-    template_noise_df = template_noise_df[template_noise_df["Phrase"] != ""].copy()
 
     template_noise_df = template_noise_df.sort_values(
         by=["Phrase"],
@@ -638,9 +620,8 @@ def process_tickets(run_month):
 
         for phrase in TEMPLATE_PHRASES:
             pattern = re.compile(re.escape(phrase), re.IGNORECASE)
-            cleaned = pattern.sub(" ", cleaned)
+            cleaned = pattern.sub("", cleaned)
 
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
         return cleaned
 
     end_user_tickets["Description_clean"] = (
@@ -876,8 +857,9 @@ def process_tickets(run_month):
     print("✅ Raw input supports .xlsx and .csv.")
     print("✅ Canonical ingestion applied.")
     print("✅ Original text preserved in output.")
-    print("✅ Strong matching normalization applied.")
-    print("✅ Keyword and phrase normalization applied.")
+    print("✅ Canonical helper fields used for matching logic.")
+    print("✅ Deterministic rule ordering applied.")
+    print("✅ Hidden character normalization applied.")
     print("✅ Service mapping uses canonical in-memory matching.")
     print("✅ Final category consolidation uses canonical in-memory matching.")
     print("✅ Monthly output saved to:", output_file)
