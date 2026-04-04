@@ -248,23 +248,28 @@ def process_tickets(run_month):
 
     def normalize_invisible_chars(text):
         """
-        Normalize invisible / special whitespace characters that often
-        differ between Excel and CSV exports.
+        Normalize invisible / special whitespace characters and Excel-escaped
+        line break artifacts that may differ between Excel and CSV exports.
         """
         if pd.isna(text):
             return ""
 
         text = str(text)
 
+        # Fix Excel-escaped control sequences observed in work-machine XLSX input
+        text = re.sub(r"_x000D_", "\r", text, flags=re.IGNORECASE)
+        text = re.sub(r"_x000A_", "\n", text, flags=re.IGNORECASE)
+        text = re.sub(r"_x0009_", "\t", text, flags=re.IGNORECASE)
+
         replacements = {
-            "\u00A0": " ",
-            "\u2007": " ",
-            "\u202F": " ",
-            "\u200B": "",
-            "\u200C": "",
-            "\u200D": "",
-            "\u2060": "",
-            "\uFEFF": "",
+            "\u00A0": " ",   # non-breaking space
+            "\u2007": " ",   # figure space
+            "\u202F": " ",   # narrow no-break space
+            "\u200B": "",    # zero-width space
+            "\u200C": "",    # zero-width non-joiner
+            "\u200D": "",    # zero-width joiner
+            "\u2060": "",    # word joiner
+            "\uFEFF": "",    # BOM / zero-width no-break space
         }
 
         for bad, good in replacements.items():
