@@ -1,9 +1,39 @@
 import os
 import re
+
 import pandas as pd
 
 
 def process_tickets(run_month):
+
+    # ==================================================
+    # 0️⃣ RUN MONTH NORMALIZATION
+    # ==================================================
+
+    def normalize_run_month_text(value):
+        """
+        Normalize user-entered month text into the expected format: Jan-26
+        without changing the underlying business rule.
+        """
+        if value is None:
+            return ""
+
+        value = str(value).strip()
+
+        if not value:
+            return ""
+
+        value = value.replace("_", "-").replace("/", "-")
+        value = re.sub(r"\s+", "", value)
+
+        match = re.fullmatch(r"([A-Za-z]{3})-(\d{2})", value)
+        if not match:
+            return value
+
+        mon, yy = match.groups()
+        return f"{mon.title()}-{yy}"
+
+    run_month = normalize_run_month_text(run_month)
 
     # ==================================================
     # 1️⃣ BASE PATHS
@@ -15,6 +45,8 @@ def process_tickets(run_month):
     OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 
     MONTH_RAW_DIR = os.path.join(RAW_DIR, run_month)
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     # ==================================================
     # 2️⃣ VALIDATE INPUT MONTH FOLDER
@@ -77,45 +109,86 @@ def process_tickets(run_month):
 
     RULES_FILE = os.path.join(CONFIG_DIR, "business_rules.xlsx")
 
-    assignment_groups_df = pd.read_excel(
+    if not os.path.exists(RULES_FILE):
+        print(f"❌ Rules file not found: {RULES_FILE}")
+        return None
+
+    def read_excel_safe(file_path, sheet_name=0, dtype=None, keep_default_na=True):
+        """
+        Read Excel more safely across environments/pandas versions.
+        Default to first sheet unless a sheet name is explicitly passed.
+        """
+        try:
+            return pd.read_excel(
+                file_path,
+                sheet_name=sheet_name,
+                dtype=dtype,
+                keep_default_na=keep_default_na,
+                engine="openpyxl",
+            )
+        except TypeError:
+            return pd.read_excel(
+                file_path,
+                sheet_name=sheet_name,
+                dtype=dtype,
+                engine="openpyxl",
+            )
+        except ImportError:
+            print("❌ openpyxl is required to read Excel files. Please install it with: pip install openpyxl")
+            return None
+        except Exception as e:
+            print(f"❌ Failed to read Excel file: {file_path}")
+            if sheet_name is not None:
+                print(f"   Sheet: {sheet_name}")
+            print(f"   Error: {e}")
+            return None
+
+    assignment_groups_df = read_excel_safe(
         RULES_FILE,
         sheet_name="assignment_groups"
     )
-
-    keyword_rules_df = pd.read_excel(
+    keyword_rules_df = read_excel_safe(
         RULES_FILE,
         sheet_name="keyword_rules"
     )
-
-    phrase_rules_df = pd.read_excel(
+    phrase_rules_df = read_excel_safe(
         RULES_FILE,
         sheet_name="phrase_rules"
     )
-
-    template_noise_df = pd.read_excel(
+    template_noise_df = read_excel_safe(
         RULES_FILE,
         sheet_name="template_noise"
     )
-
-    category_rules_df = pd.read_excel(
+    category_rules_df = read_excel_safe(
         RULES_FILE,
         sheet_name="category_check"
     )
-
-    service_rules_df = pd.read_excel(
+    service_rules_df = read_excel_safe(
         RULES_FILE,
         sheet_name="service_check"
     )
-
-    column_mapping_df = pd.read_excel(
+    column_mapping_df = read_excel_safe(
         RULES_FILE,
         sheet_name="column_mapping"
     )
-
-    final_category_consolidation_df = pd.read_excel(
+    final_category_consolidation_df = read_excel_safe(
         RULES_FILE,
         sheet_name="final_category_consolidation"
     )
+
+    config_dfs = [
+        assignment_groups_df,
+        keyword_rules_df,
+        phrase_rules_df,
+        template_noise_df,
+        category_rules_df,
+        service_rules_df,
+        column_mapping_df,
+        final_category_consolidation_df,
+    ]
+
+    if any(df is None for df in config_dfs):
+        return None
 
     # ==================================================
     # 4️⃣ COLUMN STANDARDIZATION
@@ -147,8 +220,11 @@ def process_tickets(run_month):
         "Priority", "Category", "Service", "Resolved", "Close notes"
     ]
 
+    logic_required_columns = required_columns + ["Primary Ticket"]
+
     def standardize_columns(df):
-        df.columns = df.columns.str.strip()
+        df = df.copy()
+        df.columns = [str(col).strip() for col in df.columns]
         lower_cols = {col.lower(): col for col in df.columns}
 
         rename_dict = {}
@@ -160,7 +236,7 @@ def process_tickets(run_month):
 
         df = df.rename(columns=rename_dict)
 
-        for col in required_columns:
+        for col in logic_required_columns:
             if col not in df.columns:
                 df[col] = ""
 
@@ -181,14 +257,14 @@ def process_tickets(run_month):
         text = str(text)
 
         replacements = {
-            "\u00A0": " ",   # non-breaking space
-            "\u2007": " ",   # figure space
-            "\u202F": " ",   # narrow no-break space
-            "\u200B": "",    # zero-width space
-            "\u200C": "",    # zero-width non-joiner
-            "\u200D": "",    # zero-width joiner
-            "\u2060": "",    # word joiner
-            "\uFEFF": "",    # BOM / zero-width no-break space
+            "\u00A0": " ",
+            "\u2007": " ",
+            "\u202F": " ",
+            "\u200B": "",
+            "\u200C": "",
+            "\u200D": "",
+            "\u2060": "",
+            "\uFEFF": "",
         }
 
         for bad, good in replacements.items():
@@ -227,28 +303,52 @@ def process_tickets(run_month):
         """
         ext = os.path.splitext(file_path)[1].lower()
 
-        if ext == ".xlsx":
-            df = pd.read_excel(
-                file_path,
-                dtype=str,
-                keep_default_na=False
-            )
-        elif ext == ".csv":
-            df = pd.read_csv(
-                file_path,
-                dtype=str,
-                keep_default_na=False
-            )
-        else:
-            raise ValueError(f"Unsupported file format: {file_path}")
+        try:
+            if ext == ".xlsx":
+                df = read_excel_safe(
+                    file_path,
+                    sheet_name=0,
+                    dtype=str,
+                    keep_default_na=False
+                )
+                if df is None:
+                    return None
+            elif ext == ".csv":
+                try:
+                    df = pd.read_csv(
+                        file_path,
+                        dtype=str,
+                        keep_default_na=False,
+                        encoding="utf-8-sig"
+                    )
+                except UnicodeDecodeError:
+                    df = pd.read_csv(
+                        file_path,
+                        dtype=str,
+                        keep_default_na=False,
+                        encoding="latin1"
+                    )
+            else:
+                print(f"❌ Unsupported file format: {file_path}")
+                return None
+        except Exception as e:
+            print(f"❌ Failed to load raw file: {file_path}")
+            print(f"   Error: {e}")
+            return None
 
         df = df.apply(lambda col: col.map(canonicalize_scalar))
-
         return df
 
-    incident_df = standardize_columns(load_raw_file(incident_file))
-    ur_df = standardize_columns(load_raw_file(ur_file))
-    task_df = standardize_columns(load_raw_file(task_file))
+    incident_df = load_raw_file(incident_file)
+    ur_df = load_raw_file(ur_file)
+    task_df = load_raw_file(task_file)
+
+    if any(df is None for df in [incident_df, ur_df, task_df]):
+        return None
+
+    incident_df = standardize_columns(incident_df)
+    ur_df = standardize_columns(ur_df)
+    task_df = standardize_columns(task_df)
 
     # ==================================================
     # 6️⃣ BUSINESS FILTERS
@@ -303,18 +403,11 @@ def process_tickets(run_month):
     # ==================================================
 
     def preserve_display_text(text):
-        """
-        Preserve business-facing/output text.
-        - Keep original case
-        - Keep line breaks
-        - Keep internal spacing structure
-        - Normalize invisible chars and line endings only
-        - Strip only outer whitespace
-        """
         if pd.isna(text):
             return ""
 
         text = normalize_invisible_chars(text)
+        text = str(text)
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         text = text.strip()
 
@@ -324,10 +417,6 @@ def process_tickets(run_month):
         return text
 
     def normalize_matching_text(text):
-        """
-        For fields used in keyword/phrase matching.
-        Lowercase + normalize whitespace + normalize invisible chars.
-        """
         if pd.isna(text):
             return ""
 
@@ -338,11 +427,6 @@ def process_tickets(run_month):
         return text
 
     def normalize_canonical_key(text):
-        """
-        For controlled exact-match keys where we want
-        in-memory canonical matching without changing
-        business-facing values.
-        """
         if pd.isna(text):
             return ""
 
@@ -352,7 +436,6 @@ def process_tickets(run_month):
         text = text.lower()
         return text
 
-    # Preserve original business-facing columns
     if "Short description" in end_user_tickets.columns:
         end_user_tickets["Short description"] = (
             end_user_tickets["Short description"].apply(preserve_display_text)
@@ -639,15 +722,9 @@ def process_tickets(run_month):
         category_value = str(row.get("Category_canonical", "")).strip()
         service_value = str(row.get("Service_canonical", "")).strip()
 
-        # -----------------------------
-        # 1️⃣ CATEGORY OVERRIDE
-        # -----------------------------
         if category_value in category_rules:
             return category_rules[category_value]
 
-        # -----------------------------
-        # 2️⃣ SERVICE MAPPING
-        # -----------------------------
         if service_value:
             if service_value in service_category_map:
                 return service_category_map[service_value]
@@ -657,9 +734,6 @@ def process_tickets(run_month):
         short_desc = str(row.get("Short description_canonical", "")).strip()
         description = str(row.get("Description_clean", "")).strip()
 
-        # -----------------------------
-        # 3️⃣ MICROSOFT TEAMS RULE
-        # -----------------------------
         if "Microsoft Teams" in category_keywords:
             for keyword in sorted(category_keywords["Microsoft Teams"]):
                 if keyword in short_desc:
@@ -672,9 +746,6 @@ def process_tickets(run_month):
             set(category_keywords.keys()) | set(category_phrases.keys())
         )
 
-        # -----------------------------
-        # 4️⃣ WEIGHTED SCORING ENGINE
-        # -----------------------------
         for category in all_categories:
 
             if category == "Microsoft Teams":
@@ -751,6 +822,18 @@ def process_tickets(run_month):
     end_user_tickets = end_user_tickets[final_columns].copy()
 
     def remove_garbage_rows(df):
+        if not isinstance(df, pd.DataFrame):
+            print("⚠️ Skipping invalid object during cleanup; expected DataFrame.")
+            return pd.DataFrame()
+
+        df = df.copy()
+
+        required_cleanup_columns = ["Number", "Opened", "Short description", "Description"]
+
+        for col in required_cleanup_columns:
+            if col not in df.columns:
+                df[col] = ""
+
         df = df[
             ~df["Number"].astype(str).str.contains(
                 "Export stopped", case=False, na=False
@@ -761,8 +844,8 @@ def process_tickets(run_month):
 
         df = df[
             ~(
-                df["Number"].isna() &
-                df["Opened"].isna() &
+                (df["Number"].astype(str).str.strip() == "") &
+                (df["Opened"].astype(str).str.strip() == "") &
                 (df["Short description"].astype(str).str.strip() == "") &
                 (df["Description"].astype(str).str.strip() == "")
             )
@@ -788,6 +871,7 @@ def process_tickets(run_month):
         return text
 
     def sanitize_for_excel(df):
+        df = df.copy()
         text_columns = df.select_dtypes(include=["object"]).columns.tolist()
 
         for col in text_columns:
@@ -812,7 +896,16 @@ def process_tickets(run_month):
     # ==================================================
 
     monthly_output_df = sanitize_for_excel(end_user_tickets.copy())
-    monthly_output_df.to_excel(output_file, index=False)
+
+    try:
+        monthly_output_df.to_excel(output_file, index=False, engine="openpyxl")
+    except ImportError:
+        print("❌ openpyxl is required to write Excel files. Please install it with: pip install openpyxl")
+        return None
+    except Exception as e:
+        print(f"❌ Failed to save monthly output: {output_file}")
+        print(f"   Error: {e}")
+        return None
 
     # ==================================================
     # 1️⃣9️⃣ REBUILD MASTER FILE FROM MONTHLY OUTPUTS
@@ -820,20 +913,34 @@ def process_tickets(run_month):
 
     monthly_files = []
 
-    for file_name in os.listdir(OUTPUT_DIR):
-        if (
-            file_name.startswith("end_user_ticket_data_")
-            and file_name.endswith(".xlsx")
-        ):
-            monthly_files.append(os.path.join(OUTPUT_DIR, file_name))
+    try:
+        for file_name in os.listdir(OUTPUT_DIR):
+            if (
+                file_name.startswith("end_user_ticket_data_")
+                and file_name.endswith(".xlsx")
+            ):
+                monthly_files.append(os.path.join(OUTPUT_DIR, file_name))
+    except Exception as e:
+        print(f"❌ Failed to scan output directory: {OUTPUT_DIR}")
+        print(f"   Error: {e}")
+        return None
 
     monthly_files = sorted(monthly_files)
 
     master_parts = []
 
     for monthly_file in monthly_files:
-        df = pd.read_excel(monthly_file)
+        df = read_excel_safe(monthly_file, sheet_name=0)
+        if df is None:
+            print(f"⚠️ Skipping unreadable monthly output file: {monthly_file}")
+            continue
+
         df = remove_garbage_rows(df)
+
+        if df.empty:
+            print(f"⚠️ Skipping empty or invalid monthly output file: {monthly_file}")
+            continue
+
         master_parts.append(df)
 
     if master_parts:
@@ -847,7 +954,16 @@ def process_tickets(run_month):
     master_df = remove_garbage_rows(master_df)
 
     master_output_df = sanitize_for_excel(master_df.copy())
-    master_output_df.to_excel(master_file, index=False)
+
+    try:
+        master_output_df.to_excel(master_file, index=False, engine="openpyxl")
+    except ImportError:
+        print("❌ openpyxl is required to write Excel files. Please install it with: pip install openpyxl")
+        return None
+    except Exception as e:
+        print(f"❌ Failed to save master output: {master_file}")
+        print(f"   Error: {e}")
+        return None
 
     print("✅ Weighted scoring processing complete.")
     print("✅ Final category consolidation applied.")
