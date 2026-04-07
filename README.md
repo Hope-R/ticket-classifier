@@ -42,3 +42,7 @@ python main.py
 ## Security
 
 Sensitive data such as ticket exports and real business rules are excluded using `.gitignore`.
+
+## Documentation
+
+- [Code Flow](docs/code_flow.md)
