@@ -5,7 +5,8 @@ raw_data/
 output/
 
 # Ignore real business rules
-config/business_rules.xlsx
+config/*.xlsx
+!config/business_rules_template.xlsx
 
 # Ignore Mac system files
 .DS_Store
