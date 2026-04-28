@@ -213,6 +213,8 @@ def process_tickets(run_month):
         .apply(list)
         .to_dict()
     )
+    print("\n🔎 OPENED ALIASES FROM BUSINESS_RULES:")
+    print(column_aliases.get("Opened"))
 
     required_columns = [
         "Number", "Caller", "Email", "Contact type", "Opened",
