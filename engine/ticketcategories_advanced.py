@@ -213,9 +213,6 @@ def process_tickets(run_month):
         .apply(list)
         .to_dict()
     )
-    print("\n🔎 OPENED ALIASES FROM BUSINESS_RULES:")
-    print(column_aliases.get("Opened"))
-
     required_columns = [
         "Number", "Caller", "Email", "Contact type", "Opened",
         "Short description", "Description", "Assignment group",
@@ -236,11 +233,6 @@ def process_tickets(run_month):
             for alias in aliases:
                 if alias in lower_cols:
                     rename_dict[lower_cols[alias]] = standard_col
-        
-        print("\n🔎 RENAME DICT OPENED DEBUG:")
-        for old_col, new_col in rename_dict.items():
-            if new_col == "Opened" or old_col == "opened_at":
-                print(repr(old_col), "->", repr(new_col))
 
         df = df.rename(columns=rename_dict)
 
@@ -306,6 +298,75 @@ def process_tickets(run_month):
 
         return value
 
+    DATE_FORMATS = [
+        # Most common ServiceNow / US-style exports first
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%Y %H:%M",
+        "%m/%d/%y %H:%M:%S",
+        "%m/%d/%y %H:%M",
+        "%m/%d/%Y %I:%M:%S %p",
+        "%m/%d/%Y %I:%M %p",
+        "%m/%d/%y %I:%M:%S %p",
+        "%m/%d/%y %I:%M %p",
+        "%m/%d/%Y",
+        "%m/%d/%y",
+
+        # Day-first formats as fallback
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+        "%d/%m/%y %H:%M:%S",
+        "%d/%m/%y %H:%M",
+        "%d/%m/%Y %I:%M:%S %p",
+        "%d/%m/%Y %I:%M %p",
+        "%d/%m/%y %I:%M:%S %p",
+        "%d/%m/%y %I:%M %p",
+        "%d/%m/%Y",
+        "%d/%m/%y",
+
+        # ISO-style formats
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+        "%Y/%m/%d",
+    ]
+
+    def parse_datetime_flexible(series):
+        """
+        Parse date/time values deterministically across environments.
+
+        Notes:
+        - MM/DD formats are intentionally prioritized before DD/MM because the
+          ServiceNow CSV exports observed so far use MM/DD/YYYY style dates.
+        - DD/MM formats are still supported as fallback for future scalability.
+        - Blank / invalid values safely become NaT.
+        """
+        clean_series = (
+            series
+            .fillna("")
+            .astype(str)
+            .map(normalize_invisible_chars)
+            .str.strip()
+        )
+
+        result = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
+
+        for fmt in DATE_FORMATS:
+            mask = result.isna() & (clean_series != "")
+            if not mask.any():
+                break
+
+            parsed = pd.to_datetime(
+                clean_series.loc[mask],
+                format=fmt,
+                errors="coerce"
+            )
+
+            result.loc[mask] = parsed
+
+        return result
+
     def load_raw_file(file_path):
         """
         Canonical ingestion layer:
@@ -354,14 +415,6 @@ def process_tickets(run_month):
     incident_df = load_raw_file(incident_file)
     ur_df = load_raw_file(ur_file)
     task_df = load_raw_file(task_file)
-    if task_df is not None:
-        print("\n🔎 TASK CSV RAW COLUMNS AFTER LOAD:")
-        for col in task_df.columns:
-            print(repr(col))
-
-        print("\n🔎 Does raw Task file already contain exact 'Opened'?")
-        print("Opened" in task_df.columns)
-
     if any(df is None for df in [incident_df, ur_df, task_df]):
         return None
 
@@ -528,10 +581,7 @@ def process_tickets(run_month):
     for val in task_sample:
         print(repr(val))
     
-    end_user_tickets["Opened"] = pd.to_datetime(
-        end_user_tickets["Opened"],
-        errors="coerce"
-    )
+    end_user_tickets["Opened"] = parse_datetime_flexible(end_user_tickets["Opened"])
 
     end_user_tickets["Month"] = end_user_tickets["Opened"].dt.strftime("%b-%y")
 
@@ -974,10 +1024,7 @@ def process_tickets(run_month):
 
     end_user_tickets = end_user_tickets[final_columns].copy()
 
-    end_user_tickets["Resolved"] = pd.to_datetime(
-        end_user_tickets["Resolved"],
-        errors="coerce"
-    )
+    end_user_tickets["Resolved"] = parse_datetime_flexible(end_user_tickets["Resolved"])
 
     def remove_garbage_rows(df):
         if not isinstance(df, pd.DataFrame):
@@ -1135,10 +1182,10 @@ def process_tickets(run_month):
             continue
 
         if "Opened" in df.columns:
-            df["Opened"] = pd.to_datetime(df["Opened"], errors="coerce")
+            df["Opened"] = parse_datetime_flexible(df["Opened"])
 
         if "Resolved" in df.columns:
-            df["Resolved"] = pd.to_datetime(df["Resolved"], errors="coerce")
+            df["Resolved"] = parse_datetime_flexible(df["Resolved"])
 
         df = remove_garbage_rows(df)
 
