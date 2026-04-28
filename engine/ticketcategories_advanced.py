@@ -236,6 +236,11 @@ def process_tickets(run_month):
             for alias in aliases:
                 if alias in lower_cols:
                     rename_dict[lower_cols[alias]] = standard_col
+        
+        print("\n🔎 RENAME DICT OPENED DEBUG:")
+        for old_col, new_col in rename_dict.items():
+            if new_col == "Opened" or old_col == "opened_at":
+                print(repr(old_col), "->", repr(new_col))
 
         df = df.rename(columns=rename_dict)
 
