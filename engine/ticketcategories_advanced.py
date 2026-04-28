@@ -521,6 +521,13 @@ def process_tickets(run_month):
     # 🔟 DERIVE MONTH FROM OPENED COLUMN
     # ==================================================
 
+    print("\n🔎 SAMPLE TASK 'Opened' VALUES BEFORE DATETIME CONVERSION:")
+    task_sample = end_user_tickets[
+        end_user_tickets["Ticket Type"] == "Task"
+    ]["Opened"].head(10)
+    for val in task_sample:
+        print(repr(val))
+    
     end_user_tickets["Opened"] = pd.to_datetime(
         end_user_tickets["Opened"],
         errors="coerce"
