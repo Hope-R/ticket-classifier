@@ -347,6 +347,13 @@ def process_tickets(run_month):
     incident_df = load_raw_file(incident_file)
     ur_df = load_raw_file(ur_file)
     task_df = load_raw_file(task_file)
+    if task_df is not None:
+        print("\n🔎 TASK CSV RAW COLUMNS AFTER LOAD:")
+        for col in task_df.columns:
+            print(repr(col))
+
+        print("\n🔎 Does raw Task file already contain exact 'Opened'?")
+        print("Opened" in task_df.columns)
 
     if any(df is None for df in [incident_df, ur_df, task_df]):
         return None
