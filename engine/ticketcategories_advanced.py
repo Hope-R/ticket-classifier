@@ -213,6 +213,7 @@ def process_tickets(run_month):
         .apply(list)
         .to_dict()
     )
+
     required_columns = [
         "Number", "Caller", "Email", "Contact type", "Opened",
         "Short description", "Description", "Assignment group",
@@ -297,75 +298,6 @@ def process_tickets(run_month):
             return value
 
         return value
-
-    DATE_FORMATS = [
-        # Most common ServiceNow / US-style exports first
-        "%m/%d/%Y %H:%M:%S",
-        "%m/%d/%Y %H:%M",
-        "%m/%d/%y %H:%M:%S",
-        "%m/%d/%y %H:%M",
-        "%m/%d/%Y %I:%M:%S %p",
-        "%m/%d/%Y %I:%M %p",
-        "%m/%d/%y %I:%M:%S %p",
-        "%m/%d/%y %I:%M %p",
-        "%m/%d/%Y",
-        "%m/%d/%y",
-
-        # Day-first formats as fallback
-        "%d/%m/%Y %H:%M:%S",
-        "%d/%m/%Y %H:%M",
-        "%d/%m/%y %H:%M:%S",
-        "%d/%m/%y %H:%M",
-        "%d/%m/%Y %I:%M:%S %p",
-        "%d/%m/%Y %I:%M %p",
-        "%d/%m/%y %I:%M:%S %p",
-        "%d/%m/%y %I:%M %p",
-        "%d/%m/%Y",
-        "%d/%m/%y",
-
-        # ISO-style formats
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%d",
-        "%Y/%m/%d %H:%M:%S",
-        "%Y/%m/%d %H:%M",
-        "%Y/%m/%d",
-    ]
-
-    def parse_datetime_flexible(series):
-        """
-        Parse date/time values deterministically across environments.
-
-        Notes:
-        - MM/DD formats are intentionally prioritized before DD/MM because the
-          ServiceNow CSV exports observed so far use MM/DD/YYYY style dates.
-        - DD/MM formats are still supported as fallback for future scalability.
-        - Blank / invalid values safely become NaT.
-        """
-        clean_series = (
-            series
-            .fillna("")
-            .astype(str)
-            .map(normalize_invisible_chars)
-            .str.strip()
-        )
-
-        result = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
-
-        for fmt in DATE_FORMATS:
-            mask = result.isna() & (clean_series != "")
-            if not mask.any():
-                break
-
-            parsed = pd.to_datetime(
-                clean_series.loc[mask],
-                format=fmt,
-                errors="coerce"
-            )
-
-            result.loc[mask] = parsed
-
-        return result
 
     def load_raw_file(file_path):
         """
@@ -570,18 +502,126 @@ def process_tickets(run_month):
         end_user_tickets["Sub category"] = ""
         end_user_tickets["Sub category_canonical"] = ""
 
+
+    DATE_FORMATS = [
+        # MM/DD formats first because ServiceNow exports commonly use US-style dates.
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%Y %H:%M",
+        "%m/%d/%Y %I:%M:%S %p",
+        "%m/%d/%Y %I:%M %p",
+        "%m/%d/%y %H:%M:%S",
+        "%m/%d/%y %H:%M",
+        "%m/%d/%y %I:%M:%S %p",
+        "%m/%d/%y %I:%M %p",
+        "%m/%d/%Y",
+        "%m/%d/%y",
+        "%m-%d-%Y %H:%M:%S",
+        "%m-%d-%Y %H:%M",
+        "%m-%d-%Y %I:%M:%S %p",
+        "%m-%d-%Y %I:%M %p",
+        "%m-%d-%y %H:%M:%S",
+        "%m-%d-%y %H:%M",
+        "%m-%d-%y %I:%M:%S %p",
+        "%m-%d-%y %I:%M %p",
+        "%m-%d-%Y",
+        "%m-%d-%y",
+
+        # ISO / Excel-style formats.
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+        "%Y/%m/%d %I:%M:%S %p",
+        "%Y/%m/%d %I:%M %p",
+        "%Y/%m/%d",
+
+        # DD/MM fallback formats.
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+        "%d/%m/%Y %I:%M:%S %p",
+        "%d/%m/%Y %I:%M %p",
+        "%d/%m/%y %H:%M:%S",
+        "%d/%m/%y %H:%M",
+        "%d/%m/%y %I:%M:%S %p",
+        "%d/%m/%y %I:%M %p",
+        "%d/%m/%Y",
+        "%d/%m/%y",
+        "%d-%m-%Y %H:%M:%S",
+        "%d-%m-%Y %H:%M",
+        "%d-%m-%Y %I:%M:%S %p",
+        "%d-%m-%Y %I:%M %p",
+        "%d-%m-%y %H:%M:%S",
+        "%d-%m-%y %H:%M",
+        "%d-%m-%y %I:%M:%S %p",
+        "%d-%m-%y %I:%M %p",
+        "%d-%m-%Y",
+        "%d-%m-%y",
+    ]
+
+    def parse_datetime_flexible(series):
+        """
+        Parse ServiceNow / Excel / CSV date values deterministically across environments.
+        MM/DD formats are prioritized before DD/MM formats to match common ServiceNow exports.
+        """
+        result = pd.Series(pd.NaT, index=series.index)
+
+        clean_series = (
+            series
+            .fillna("")
+            .astype(str)
+            .apply(normalize_invisible_chars)
+            .str.strip()
+        )
+
+        clean_series = clean_series.mask(
+            clean_series.str.lower().isin({"", "nan", "none", "null", "nat"}),
+            ""
+        )
+
+        for fmt in DATE_FORMATS:
+            mask = result.isna() & (clean_series != "")
+            if not mask.any():
+                break
+
+            parsed = pd.to_datetime(
+                clean_series[mask],
+                format=fmt,
+                errors="coerce"
+            )
+            result.loc[parsed.index[parsed.notna()]] = parsed[parsed.notna()]
+
+        # Safety net for less common but valid date strings. Keep MM/DD priority first.
+        mask = result.isna() & (clean_series != "")
+        if mask.any():
+            parsed = pd.to_datetime(
+                clean_series[mask],
+                errors="coerce",
+                dayfirst=False
+            )
+            result.loc[parsed.index[parsed.notna()]] = parsed[parsed.notna()]
+
+        # Last fallback for DD/MM style values that were not parsed above.
+        mask = result.isna() & (clean_series != "")
+        if mask.any():
+            parsed = pd.to_datetime(
+                clean_series[mask],
+                errors="coerce",
+                dayfirst=True
+            )
+            result.loc[parsed.index[parsed.notna()]] = parsed[parsed.notna()]
+
+        return result
+
     # ==================================================
     # 🔟 DERIVE MONTH FROM OPENED COLUMN
     # ==================================================
 
-    print("\n🔎 SAMPLE TASK 'Opened' VALUES BEFORE DATETIME CONVERSION:")
-    task_sample = end_user_tickets[
-        end_user_tickets["Ticket Type"] == "Task"
-    ]["Opened"].head(10)
-    for val in task_sample:
-        print(repr(val))
-    
-    end_user_tickets["Opened"] = parse_datetime_flexible(end_user_tickets["Opened"])
+    end_user_tickets["Opened"] = parse_datetime_flexible(
+        end_user_tickets["Opened"]
+    )
 
     end_user_tickets["Month"] = end_user_tickets["Opened"].dt.strftime("%b-%y")
 
@@ -1024,7 +1064,9 @@ def process_tickets(run_month):
 
     end_user_tickets = end_user_tickets[final_columns].copy()
 
-    end_user_tickets["Resolved"] = parse_datetime_flexible(end_user_tickets["Resolved"])
+    end_user_tickets["Resolved"] = parse_datetime_flexible(
+        end_user_tickets["Resolved"]
+    )
 
     def remove_garbage_rows(df):
         if not isinstance(df, pd.DataFrame):
